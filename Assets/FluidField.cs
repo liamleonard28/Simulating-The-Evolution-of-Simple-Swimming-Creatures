@@ -284,17 +284,9 @@ public class FluidField : MonoBehaviour
         solidBuffer.SetData(solidCells);
 
         // solid step
-        // GetSolidCells();
-        // SetSolidVelocities();
+        GetSolidCells();
+        SetSolidVelocities();
 
-        for (int i=0; i<numPoints; i++)
-        {
-            if (solidCells[i] != -1)
-            {
-                print("yep1");
-                solidVelocities[i] = points[i].GetComponent<Point>().GetVelocity() / N;
-            }
-        }
         solidVelocityBuffer.SetData(solidVelocities);
 
         // velocity step
@@ -307,16 +299,7 @@ public class FluidField : MonoBehaviour
 
         AdvectVelocity();
         ProjectVelocity();
-        // AddSolidForces();
-
-        for (int i=0; i<numPoints; i++)
-        {
-            if (solidCells[i] != -1)
-            {
-                print("yep2");
-                points[i].GetComponent<Point>().AddForce(solidForces[i] * N);
-            }
-        }
+        AddSolidForces();
 
         // dye step
         GetSources();

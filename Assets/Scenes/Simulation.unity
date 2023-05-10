@@ -3201,7 +3201,6 @@ MonoBehaviour:
   point: {fileID: 53792747726775024, guid: 11ba2e666ae0ecc4a93d7904da00a1f4, type: 3}
   cell: {fileID: 5911950450487096154, guid: 0dea4a4e5bf9fd941ba999291fcd290d, type: 3}
   obstacle: {fileID: 5792731701401340894, guid: 361423af54b610d43a94f54487ae5bff, type: 3}
-  dummy: {fileID: 3588211971850459147, guid: c9e2e97c92c504444893649f26973ca8, type: 3}
   turbine: {fileID: 2350962738645421651, guid: 25f5f77459464ff45b70a50e67c16960, type: 3}
   isExperiment: 0
   viscosity: 0.01
