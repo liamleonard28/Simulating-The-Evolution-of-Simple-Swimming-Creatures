@@ -110,8 +110,6 @@ public class FluidField : MonoBehaviour
 
                 int i = index(x, y);
 
-                newPoint.GetComponent<Point>().index = i;
-
                 points[i] = newPoint;
                 cells[i] = newCell;
             }
