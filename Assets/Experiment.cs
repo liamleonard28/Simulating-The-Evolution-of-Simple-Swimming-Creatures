@@ -76,17 +76,13 @@ public class Experiment : MonoBehaviour
 
     void NewGeneration()
     {
-        Debug.Log("new gen");
         generation++;
         
         for (int i=0; i<populationSize/2; i++)
         {
             population[i+populationSize/2].SetDNA(population[i].GetDNAString());
-            Debug.Log("pre mute");
             population[i+populationSize/2].Mutate(species.Count);
             species.Add(population[i+populationSize/2].GetDNA());
-            Debug.Log("post mute");
-            Debug.Log("change: "+(population[i].DNA != population[i+populationSize/2].DNA));
         }
     }
 
