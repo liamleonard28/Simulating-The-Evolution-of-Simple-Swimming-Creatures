@@ -1,0 +1,472 @@
+// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel addForce
+#pragma kernel addDye
+#pragma kernel diffuseVelocity
+#pragma kernel diffuseDye
+#pragma kernel advectVelocity
+#pragma kernel advectDye
+#pragma kernel solvePressure
+#pragma kernel solveGradient
+#pragma kernel solveIncompressible
+
+#define index(i, j) ((i)+(N+2)*(j))
+
+int N;
+float deltaTime;
+float viscosity;
+float diffusion;
+
+StructuredBuffer<float2> force;
+StructuredBuffer<float2> oldVelocity;
+RWStructuredBuffer<float2> newVelocity;
+RWStructuredBuffer<float2> pressure;
+StructuredBuffer<int> solidCell;
+StructuredBuffer<float2> solidVelocity;
+RWStructuredBuffer<float2> solidForce;
+
+StructuredBuffer<float2> source;
+StructuredBuffer<float2> oldDye;
+RWStructuredBuffer<float2> newDye;
+
+[numthreads(8,8,1)]
+void addForce (uint3 id : SV_DispatchThreadID)
+{
+    int i = id.x + 1;
+    int j = id.y + 1;
+    newVelocity[index(i, j)] = oldVelocity[index(i, j)] + deltaTime * force[index(i, j)];
+}
+
+[numthreads(8,8,1)]
+void addDye (uint3 id : SV_DispatchThreadID)
+{
+    int i = id.x + 1;
+    int j = id.y + 1;
+    newDye[index(i, j)] = oldDye[index(i, j)] + deltaTime * source[index(i, j)];
+}
+
+[numthreads(8,8,1)]
+void diffuseVelocity (uint3 id : SV_DispatchThreadID)
+{
+    int i = id.x + 1;
+    int j = id.y + 1;
+    
+    float a = deltaTime * viscosity * N * N;
+
+    float2 neighbour1, neighbour2, neighbour3, neighbour4;
+
+    if (solidCell[index(i, j)] == -1)
+    {
+        if (solidCell[index(i-1, j)] == -1)
+        {
+            neighbour1 = newVelocity[index(i-1, j)];
+        }
+        else
+        {
+            float relativeVelocity = newVelocity[index(i, j)].x - solidVelocity[index(i-1, j)].x;
+            neighbour1 = float2(-relativeVelocity, 0);
+        }
+        if (solidCell[index(i+1, j)] == -1)
+        {
+            neighbour2 = newVelocity[index(i+1, j)];
+        }
+        else
+        {
+            // neighbour2 = newVelocity[index(i, j)];
+            float relativeVelocity = newVelocity[index(i, j)].x - solidVelocity[index(i+1, j)].x;
+            neighbour2 = float2(-relativeVelocity, 0);
+        }
+        if (solidCell[index(i, j-1)] == -1)
+        {
+            neighbour3 = newVelocity[index(i, j-1)];
+        }
+        else
+        {
+            float relativeVelocity = newVelocity[index(i, j)].y - solidVelocity[index(i, j-1)].y;
+            neighbour3 = float2(0, -relativeVelocity);
+        }
+        if (solidCell[index(i, j+1)] == -1)
+        {
+            neighbour4 = newVelocity[index(i, j+1)];
+        }
+        else
+        {
+            float relativeVelocity = newVelocity[index(i, j)].y - solidVelocity[index(i, j+1)].y;
+            neighbour4 = float2(0, -relativeVelocity);
+        }
+
+        float2 neighbourVelSum = neighbour1 + neighbour2 + neighbour3 + neighbour4;
+        newVelocity[index(i, j)] = (oldVelocity[index(i, j)] + a * neighbourVelSum) / (1 + 4 * a);
+    }
+}
+
+[numthreads(8,8,1)]
+void diffuseDye (uint3 id : SV_DispatchThreadID)
+{
+    int i = id.x + 1;
+    int j = id.y + 1;
+    float a = deltaTime * diffusion * N * N;
+    
+    float2 neighbourDyeSum = 0;
+    int numFluidNeighbours = 4;
+    if (solidCell[index(i-1, j)] == -1)
+    {
+        neighbourDyeSum += newDye[index(i-1, j)];
+    }
+    else
+    {
+        neighbourDyeSum += newDye[index(i, j)];
+    }
+    if (solidCell[index(i+1, j)] == -1)
+    {
+        neighbourDyeSum += newDye[index(i+1, j)];
+    }
+    else
+    {
+        neighbourDyeSum += newDye[index(i, j)];
+    }
+    if (solidCell[index(i, j-1)] == -1)
+    {
+        neighbourDyeSum += newDye[index(i, j-1)];
+    }
+    else
+    {
+        neighbourDyeSum += newDye[index(i, j)];
+    }
+    if (solidCell[index(i, j+1)] == -1)
+    {
+        neighbourDyeSum += newDye[index(i, j+1)];
+    }
+    else
+    {
+        neighbourDyeSum += newDye[index(i, j)];
+    }
+
+    newDye[index(i, j)] = (oldDye[index(i, j)] + a * neighbourDyeSum) / (1 + numFluidNeighbours * a);
+}
+
+[numthreads(8,8,1)]
+void advectVelocity (uint3 id : SV_DispatchThreadID)
+{
+    int i = id.x + 1;
+    int j = id.y + 1;
+
+    float2 backtrace = float2(i, j) - deltaTime * N * oldVelocity[index(i, j)];
+            
+    if (backtrace.x < 0.5) backtrace.x = 0.5;
+    if (backtrace.x > N + 0.5) backtrace.x = N + 0.5;
+    if (backtrace.y < 0.5) backtrace.y = 0.5; 
+    if (backtrace.y > N + 0.5) backtrace.y = N + 0.5;
+
+    int i0 = (int)backtrace.x;
+    int i1 = i0 + 1;
+    int j0 = (int)backtrace.y;
+    int j1 = j0 + 1;
+    
+    float s1 = backtrace.x-i0;
+    float s0 = 1-s1;
+    float t1 = backtrace.y-j0;
+    float t0 = 1-t1;
+
+    float2 i0j0, i0j1, i1j0, i1j1;
+
+    if (solidCell[index(i, j) == -1])
+    {
+        if (solidCell[index(i0, j0)] == -1)
+        {
+            i0j0 = oldVelocity[index(i0, j0)];
+        }
+        else
+        {
+            i0j0 = float2 (0, 0);
+            if (solidCell[index(i1, j0)] == -1)
+            {
+                i0j0.x = solidVelocity[index(i0, j0)].x - oldVelocity[index(i1, j0)].x;
+            }
+            if (solidCell[index(i0, j1)] == -1)
+            {
+                i0j0.y = solidVelocity[index(i0, j0)].y - oldVelocity[index(i0, j1)].y;
+            }
+        }
+
+        if (solidCell[index(i0, j1)] == -1)
+        {
+            i0j1 = oldVelocity[index(i0, j1)];
+        }
+        else
+        {
+            i0j1 = float2 (0, 0);
+            if (solidCell[index(i1, j1)] == -1)
+            {
+                i0j1.x = solidVelocity[index(i0, j1)].x - oldVelocity[index(i1, j1)].x;
+            }
+            if (solidCell[index(i0, j0)] == -1)
+            {
+                i0j1.y = solidVelocity[index(i0, j1)].y - oldVelocity[index(i0, j0)].y;
+            }
+        }
+
+        if (solidCell[index(i1, j0)] == -1)
+        {
+            i1j0 = oldVelocity[index(i1, j0)];
+        }
+        else
+        {
+            i1j0 = float2 (0, 0);
+            if (solidCell[index(i0, j0)] == -1)
+            {
+                i1j0.x =  solidVelocity[index(i1, j0)].x - oldVelocity[index(i0, j0)].x;
+            }
+            if (solidCell[index(i1, j1)] == -1)
+            {
+                i1j0.y =  solidVelocity[index(i1, j0)].y - oldVelocity[index(i1, j1)].y;
+            }
+        }
+
+        if (solidCell[index(i1, j1)] == -1)
+        {
+            i1j1 = oldVelocity[index(i1, j1)];
+        }
+        else
+        {
+            i1j1 = float2 (0, 0);
+            if (solidCell[index(i0, j1)] == -1)
+            {
+                i1j1.x = solidVelocity[index(i1, j1)].x - oldVelocity[index(i0, j1)].x;
+            }
+            if (solidCell[index(i1, j0)] == -1)
+            {
+                i1j1.y = solidVelocity[index(i1, j1)].y - oldVelocity[index(i1, j0)].y;
+            }
+        }
+
+        newVelocity[index(i, j)] = s0 * (t0 * i0j0 + t1 * i0j1) +
+                                   s1 * (t0 * i1j0 + t1 * i1j1);
+    }
+}
+
+[numthreads(8,8,1)]
+void advectDye (uint3 id : SV_DispatchThreadID)
+{
+    int i = id.x + 1;
+    int j = id.y + 1;
+    float2 backtrace = float2(i, j) - deltaTime * N * newVelocity[index(i, j)];
+
+    if (backtrace.x < 0.5) backtrace.x = 0.5;
+    if (backtrace.x > N + 0.5) backtrace.x = N + 0.5;
+    if (backtrace.y < 0.5) backtrace.y = 0.5;
+    if (backtrace.y > N + 0.5) backtrace.y = N + 0.5;
+
+    int i0 = (int)backtrace.x;
+    int i1 = i0 + 1;
+    int j0 = (int)backtrace.y;
+    int j1 = j0 + 1;
+    
+    float s1 = backtrace.x-i0;
+    float s0 = 1-s1;
+    float t1 = backtrace.y-j0;
+    float t0 = 1-t1;
+
+    newDye[index(i, j)] = s0 * (t0 * oldDye[index(i0, j0)] + t1 * oldDye[index(i0, j1)]) +
+                          s1 * (t0 * oldDye[index(i1, j0)] + t1 * oldDye[index(i1, j1)]);
+}
+
+[numthreads(8,8,1)]
+void solvePressure (uint3 id : SV_DispatchThreadID)
+{
+    int i = id.x + 1;
+    int j = id.y + 1;
+
+    float h = 1.0/N;
+
+    float neighbour1, neighbour2, neighbour3, neighbour4;
+
+    if (solidCell[index(i, j)] == -1)
+    {
+        if (solidCell[index(i+1, j)] == -1)
+        {
+            neighbour1 = newVelocity[index(i+1, j)].x;
+        }
+        else
+        {
+            neighbour1 = -newVelocity[index(i, j)].x + solidVelocity[index(i+1, j)].x;
+        }
+
+        if (solidCell[index(i-1, j)] == -1)
+        {
+            neighbour2 = newVelocity[index(i-1, j)].x;
+        }
+        else
+        {
+            neighbour2 = -newVelocity[index(i, j)].x + solidVelocity[index(i-1, j)].x;
+        }
+
+        if (solidCell[index(i, j+1)] == -1)
+        {
+            neighbour3 = newVelocity[index(i, j+1)].y;
+        }
+        else
+        {
+            neighbour3 = -newVelocity[index(i, j)].y + solidVelocity[index(i, j+1)].y;
+        }
+
+        if (solidCell[index(i, j-1)] == -1)
+        {
+            neighbour4 = newVelocity[index(i, j-1)].y;
+        }
+        else
+        {
+            neighbour4 = -newVelocity[index(i, j)].y + solidVelocity[index(i, j-1)].y;
+        }
+
+
+        pressure[index(i, j)].x = 0;
+        pressure[index(i, j)].y = -0.5 * h * (neighbour1 - neighbour2 + neighbour3 - neighbour4);
+    }
+}
+
+[numthreads(8,8,1)]
+void solveGradient (uint3 id : SV_DispatchThreadID)
+{
+    int i = id.x + 1;
+    int j = id.y + 1;
+
+    float h = 1.0/N;
+
+    float neighbour1, neighbour2, neighbour3, neighbour4;
+
+    if (solidCell[index(i, j)] == -1)
+    {
+    
+        if (solidCell[index(i-1, j)] == -1)
+        {
+            neighbour1 = pressure[index(i-1, j)].x;
+        }
+        else
+        {
+            neighbour1 = pressure[index(i, j)].x + solidVelocity[index(i-1, j)].x * 0.5 * h;
+        }
+
+        if (solidCell[index(i+1, j)] == -1)
+        {
+            neighbour2 = pressure[index(i+1, j)].x;
+        }
+        else
+        {
+            neighbour2 = pressure[index(i, j)].x - solidVelocity[index(i+1, j)].x * 0.5 * h;
+        }
+
+        if (solidCell[index(i, j-1)] == -1)
+        {
+            neighbour3 = pressure[index(i, j-1)].x;
+        }
+        else
+        {
+            neighbour3 = pressure[index(i, j)].x + solidVelocity[index(i, j-1)].y * 0.5 * h;
+        }
+
+        if (solidCell[index(i, j+1)] == -1)
+        {
+            neighbour4 = pressure[index(i, j+1)].x;
+        }
+        else
+        {
+            neighbour4 = pressure[index(i, j)].x - solidVelocity[index(i, j+1)].y * 0.5 * h;
+        }
+
+        pressure[index(i, j)].x = (pressure[index(i, j)].y + neighbour1 + neighbour2 + neighbour3 + neighbour4) / 4;
+    }
+}
+
+[numthreads(8,8,1)]
+void solveIncompressible (uint3 id : SV_DispatchThreadID)
+{
+    int i = id.x + 1;
+    int j = id.y + 1;
+
+    float h = 1.0/N;
+
+    float neighbour1, neighbour2, neighbour3, neighbour4;
+
+    if (solidCell[index(i, j)] == -1)
+    {
+        if (solidCell[index(i+1, j)].x == -1)
+        {
+            neighbour1 = pressure[index(i+1, j)].x;
+        }
+        else
+        {
+            neighbour1 = pressure[index(i, j)].x + solidVelocity[index(i+1, j)].x * 0.5 * h;
+        }
+
+        if (solidCell[index(i-1, j)].x == -1)
+        {
+            neighbour2 = pressure[index(i-1, j)].x;
+        }
+        else
+        {
+            neighbour2 = pressure[index(i, j)].x - solidVelocity[index(i-1, j)].x * 0.5 * h;
+        }
+
+        if (solidCell[index(i, j+1)].x == -1)
+        {
+            neighbour3 = pressure[index(i, j+1)].x;
+        }
+        else
+        {
+            neighbour3 = pressure[index(i, j)].x + solidVelocity[index(i, j+1)].y * 0.5 * h;
+        }
+
+        if (solidCell[index(i, j-1)].x == -1)
+        {
+            neighbour4 = pressure[index(i, j-1)].x;
+        }
+        else
+        {
+            neighbour4 = pressure[index(i, j)].x - solidVelocity[index(i, j-1)].y * 0.5 * h;
+        }
+
+        newVelocity[index(i, j)].x -= 0.5 * (neighbour1 - neighbour2) / h;
+        newVelocity[index(i, j)].y -= 0.5 * (neighbour3 - neighbour4) / h;
+    }
+    else
+    {
+        if (solidCell[index(i+1, j)].x == -1)
+        {
+            neighbour1 = pressure[index(i+1, j)].x + solidVelocity[index(i, j)].x * 0.5 * h;
+        }
+        else
+        {
+            neighbour1 = 0;
+        }
+
+        if (solidCell[index(i-1, j)].x == -1)
+        {
+            neighbour2 = pressure[index(i-1, j)].x - solidVelocity[index(i, j)].x * 0.5 * h;
+        }
+        else
+        {
+            neighbour2 = 0;
+        }
+
+        if (solidCell[index(i, j+1)].x == -1)
+        {
+            neighbour3 = pressure[index(i, j+1)].x + solidVelocity[index(i, j)].y * 0.5 * h;
+        }
+        else
+        {
+            neighbour3 = 0;
+        }
+
+        if (solidCell[index(i, j-1)].x == -1)
+        {
+            neighbour4 = pressure[index(i, j-1)].x - solidVelocity[index(i, j)].y * 0.5 * h;
+        }
+        else
+        {
+            neighbour4 = 0;
+        }
+
+        solidForce[index(i, j)].x = - 0.5 * (neighbour1 - neighbour2) / h;
+        solidForce[index(i, j)].y = - 0.5 * (neighbour3 - neighbour4) / h;
+    }
+}
